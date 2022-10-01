@@ -2,6 +2,7 @@ import torch
 from torch.utils.data import Dataset
 from torch.utils.data import DataLoader
 from torch.utils.data.dataset import random_split
+from enum import Enum
 import skimage
 import skimage.io
 import skimage.transform
@@ -9,6 +10,8 @@ from PIL import Image
 import numpy as np
 import random
 import os
+
+
 
 def getTrainingTestFileLists(file_path, ds_split):
         file_list = np.array([])
@@ -28,16 +31,36 @@ def getTrainingTestFileLists(file_path, ds_split):
 
         return training, test
 
+def getPredictionTestFileLists(file_path):
+        file_list = np.array([])
+        leftImageFileName = file_path + 'image_2/'
+        dirList = os.listdir(leftImageFileName)
+
+        for file in dirList:
+            if "10.png" in file:
+                file_list = np.append(file_list, file)                                
+
+        return file_list
+
+
+class SCDLDataSetEnum(Enum):
+    TRAIN = 1
+    TEST = 2
+    PREDICT = 3
+
+
 class StereoDataset(Dataset):
-    def __init__(self, args, file_path, file_list, crop_size=[256, 256], training=True, left_right=False, shift=0):
+    def __init__(self, args, file_path, file_list, crop_size=[256, 256], ds_type=SCDLDataSetEnum.TRAIN, left_right=False, shift=0):
         super(StereoDataset, self).__init__()
         self.file_path = file_path
         self.file_list = file_list
-        self.training = training
+        self.ds_type = ds_type
         self.crop_height = crop_size[0]
         self.crop_width = crop_size[1]
         self.left_right = left_right
-        self.shift = shift                     
+        self.shift = shift          
+        self.image_height = 0
+        self.image_width = 0           
 
     def __len__(self):
         return len(self.file_list)
@@ -46,23 +69,60 @@ class StereoDataset(Dataset):
         if index >= len(self.file_list):
             return None
         else:
-            temp_data =self.loadDataPoint(self.file_list[index])
 
-            if self.training:
-                input1, input2, target = self.trainTransform(temp_data)
-                return input1, input2, target
+            if self.ds_type == SCDLDataSetEnum.PREDICT:
+                temp_data = self.loadPredictDataPoint(self.file_list[index])
+                input1, input2, h, w = self.predict_transform(temp_data)
+                return input1, input2, h, w, self.getFileName(self.file_list[index])                
             else:
-                input1, input2, target = self.testTransform(temp_data)
-                return input1, input2, target
+                temp_data =self.loadDataPoint(self.file_list[index])
+
+                if self.training:
+                    input1, input2, target = self.trainTransform(temp_data)
+                    return input1, input2, target
+                else:
+                    input1, input2, target = self.testTransform(temp_data)
+                    return input1, input2, target
+
+    def getFileName(self, file_name):
+        return file_name
         
 
+    def loadPredictDataPoint(self, file_name):
+        leftImageFile = self.file_path + 'image_2/' + file_name
+        rightImageFile = self.file_path + 'image_3/' + file_name
+
+        left = Image.open(leftImageFile)
+        right = Image.open(rightImageFile)                
+        size = np.shape(left)        
+        self.image_height = size[0]
+        self.image_width = size[1]
+        temp_data = np.zeros([6, self.image_height, self.image_width], 'float32')
+        left = np.asarray(left)
+        right = np.asarray(right)
+        r = left[:, :, 0]
+        g = left[:, :, 1]
+        b = left[:, :, 2]
+        temp_data[0, :, :] = (r - np.mean(r[:])) / np.std(r[:])
+        temp_data[1, :, :] = (g - np.mean(g[:])) / np.std(g[:])
+        temp_data[2, :, :] = (b - np.mean(b[:])) / np.std(b[:])
+        r = right[:, :, 0]
+        g = right[:, :, 1]
+        b = right[:, :, 2]	
+
+        #r,g,b,_ = right.split()
+        temp_data[3, :, :] = (r - np.mean(r[:])) / np.std(r[:])
+        temp_data[4, :, :] = (g - np.mean(g[:])) / np.std(g[:])
+        temp_data[5, :, :] = (b - np.mean(b[:])) / np.std(b[:])
+        return temp_data
+    
     def loadDataPoint(self, file_name):
         leftImageFile = self.file_path + 'image_2/' + file_name
         rightImageFile = self.file_path + 'image_3/' + file_name
         dispImageFile = self.file_path + 'disp_noc_0/' + file_name
 
         left = Image.open(leftImageFile)
-        right = Image.open(rightImageFile)
+        right = Image.open(rightImageFile)        
         dispLeft = Image.open(dispImageFile)
 
         temp = np.asarray(dispLeft)
@@ -165,6 +225,25 @@ class StereoDataset(Dataset):
         target = temp_data[6: 7, :, :]
 
         return left, right, target
+
+
+    def predict_transform(self, temp_data):
+        _, h, w=np.shape(temp_data)
+
+        if h <= self.crop_height and w <= self.crop_width: 
+            # padding zero 
+            temp = temp_data
+            temp_data = np.zeros([6, self.crop_height, self.crop_width], 'float32')
+            temp_data[:, self.crop_height - h: self.crop_height, self.crop_width - w: self.crop_width] = temp    
+        else:
+            start_x = int((w - self.crop_width) / 2)
+            start_y = int((h - self.crop_height) / 2)
+            temp_data = temp_data[:, start_y: start_y + self.crop_height, start_x: start_x + self.crop_width]
+        left = np.ones([1, 3,self.crop_height,self.crop_width],'float32')
+        left[0, :, :, :] = temp_data[0: 3, :, :]
+        right = np.ones([1, 3, self.crop_height, self.crop_width], 'float32')
+        right[0, :, :, :] = temp_data[3: 6, :, :]
+        return torch.from_numpy(left).float(), torch.from_numpy(right).float(), h, w
 
     def makeDataLoaders(self, args):
 

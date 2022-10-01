@@ -13,7 +13,7 @@ import shutil
 import numpy as np
 
 
-from dataloaders import dataset
+from dataloaders import dataset, SCDLDataSetEnum
 from dataloaders.dataset import getTrainingTestFileLists
 from utils.train_args import getTrainingArgs
 from utils.multadds_count import count_parameters_in_MB
@@ -121,7 +121,7 @@ class SCDLTrain():
         valid_iteration = 0
         three_px_acc_all = 0
         self.model.eval()
-        for iteration, batch in enumerate(self.train_loader):
+        for iteration, batch in enumerate(self.test_loader):
             input1, input2, target = Variable(batch[0],requires_grad=False), Variable(batch[1], requires_grad=False), Variable(batch[2], requires_grad=False)
             if self.options.cuda:
                 input1 = input1.cuda()
@@ -167,8 +167,8 @@ class SCDLTrain():
     def loadData(self):
         print("Loading data sets")
         train_list, test_list = getTrainingTestFileLists(self.file_path, 0.8)        
-        self.train_ds = dataset.StereoDataset(self.options, self.file_path, train_list, crop_size=[self.options.crop_height, self.options.crop_width], training=True)
-        self.test_ds = dataset.StereoDataset(self.options, self.file_path, test_list, crop_size=[384,1248], training=False)
+        self.train_ds = dataset.StereoDataset(self.options, self.file_path, train_list, crop_size=[self.options.crop_height, self.options.crop_width], ds_type=SCDLDataSetEnum.TRAIN)
+        self.test_ds = dataset.StereoDataset(self.options, self.file_path, test_list, crop_size=[384,1248], ds_type=SCDLDataSetEnum.TEST)
 
         self.train_loader= DataLoader(self.train_ds, batch_size=self.options.batch_size, shuffle=False, **self.kwargs)
         self.test_loader = DataLoader(self.test_ds, batch_size=self.options.testBatchSize, shuffle=False, **self.kwargs)
@@ -200,7 +200,7 @@ class SCDLTrain():
 
             self.scheduler.step()
 
-        self.save_checkpoint(self.options.save_path, self.option.nEpochs,{
+        self.save_checkpoint(self.options.save_path, self.options.nEpochs,{
                 'epoch': self.opt.nEpochs,
                 'state_dict': self.model.state_dict(),
                 'optimizer' : self.optimizer.state_dict(),
