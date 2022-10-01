@@ -13,7 +13,8 @@ import shutil
 import numpy as np
 
 
-from dataloaders import dataset, SCDLDataSetEnum
+from dataloaders import dataset
+from dataloaders.dataset import SCDLDataSetEnum
 from dataloaders.dataset import getTrainingTestFileLists
 from utils.train_args import getTrainingArgs
 from utils.multadds_count import count_parameters_in_MB
