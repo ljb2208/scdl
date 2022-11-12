@@ -22,6 +22,7 @@ from dataloaders.dataset import getPredictionTestFileLists
 from dataloaders.dataset import SCDLDataSetEnum
 from utils.predict_args import getPredictionArgs
 from utils.multadds_count import count_parameters_in_MB, comp_multadds
+from utils.color import convert_to_colormap
 from models.stereo_model import StereoModel
 
 
@@ -96,6 +97,11 @@ class SCDLPredict():
             temp = temp[0, :, :]
 
         skimage.io.imsave(saveFileAndPath, (temp * 256).astype('uint16'))
+        color_image = convert_to_colormap(saveFileAndPath)
+
+        skimage.io.imsave(saveFileAndPath.replace(".png", "_color.png"), color_image)
+
+
 
 
     def loadData(self):
