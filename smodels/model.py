@@ -44,10 +44,11 @@ class Attention(nn.Module):
 
         self.q = nn.Conv1d(dim, dim, kernel_size=1, bias=qkv_bias)
         self.v = nn.AvgPool1d(dim)
+        self.rwmp = nn.MaxPool1d(dim)
         self.k = nn.Conv1d(dim, dim, kernel_size=1)
         # self.kv = nn.Linear(dim, dim * 2, bias=qkv_bias)
         self.attn_drop = nn.Dropout(attn_drop)
-        self.proj = nn.Linear(dim, dim)
+        #self.proj = nn.Linear(dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
 
         self.sr_ratio = sr_ratio
@@ -57,23 +58,24 @@ class Attention(nn.Module):
 
     def forward(self, x, H, W):
         B, N, C = x.shape
-        q = self.q(x).reshape(B, N, self.num_heads, C // self.num_heads).permute(0, 2, 1, 3)
+        q_ = self.q(x)
+        
+        x_ = x.permute(0, 2, 1).reshape(B, C, H, W)
+        k_ = self.sr(x_).reshape(B, C, -1).permute(0, 2, 1)            
+            
+        v = self.v(x.transpose(2,1)).transpose(1, 2)
 
-        if self.sr_ratio > 1:
-            x_ = x.permute(0, 2, 1).reshape(B, C, H, W)
-            x_ = self.sr(x_).reshape(B, C, -1).permute(0, 2, 1)            
-            kv = self.kv(x_).reshape(B, -1, 2, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
-        else:
-            kv = self.kv(x).reshape(B, -1, 2, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
-        k, v = kv[0], kv[1]
+        attn = (q_ @ k_.transpose(-2, -1)) * self.scale
 
-        attn = (q @ k.transpose(-2, -1)) * self.scale
-        attn = attn.softmax(dim=-1)
-        attn = self.attn_drop(attn)
+        attn = self.rwmp(attn)        
 
-        x = (attn @ v).transpose(1, 2).reshape(B, N, C)
-        x = self.proj(x)
-        x = self.proj_drop(x)
+        if (self.attn_drop > 0.):
+            attn = self.attn_drop(attn)
+
+        x = (attn @ v).transpose(1, 2).reshape(B, N, C)        
+
+        if (self.proj_drop > 0.):
+            x = self.proj_drop(x)
 
         return x
 

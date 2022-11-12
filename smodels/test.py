@@ -5,6 +5,7 @@ import math
 from overlap_patch_embedding import OverlapPatchEmbedding
 from self_attention import SelfAttention
 from model import PatchEmbed
+from model import Attention
 
 
 class OverlapPatchEmbed(nn.Module):
@@ -35,6 +36,7 @@ class OverlapPatchEmbed(nn.Module):
 
 
 
+
 x = torch.randn((1, 3, 224,224))
 
 pe = PatchEmbed(img_size=224, embed_dim=64, patch_size=4)
@@ -43,6 +45,15 @@ y, HW =pe.forward(x)
 print("Here")
 print(y.shape)
 print(HW)
+
+
+# x = torch.randn((1, 3136, 64))
+attn = Attention(64, sr_ratio=2)
+
+x_ = attn.forward(y, HW[0], HW[1])
+
+
+
 
 # ope = OverlapPatchEmbedding(img_size=224, in_channels=3, embed_dim=64, patch_size=16, overlap_size=4)
 # y, X, H = ope.forward(x)
