@@ -3,13 +3,17 @@ import torch
 import torch.nn as nn
 
 x = torch.randn((1, 3136, 64))
+y = torch.randn((1, 784, 64))
+
+y_ = y.transpose(-2, -1)
+z = x @ y_
 
 
 l = nn.LayerNorm(4)
 c = nn.MaxPool1d(4) 
-d = nn.AvgPool1d(4)
+d = nn.AvgPool1d(64)
 
-c = nn.Conv1d(3136, 64, 1, 1) 
+c = nn.Conv1d(3136, 3136, 1, 1) 
 
 
 
@@ -40,6 +44,11 @@ print(x.shape)
 print(x_)
 print(x_.shape)
 
+x_ = d(x_)
+
+print("avgpool")
+print(x_)
+print(x_.shape)
 
 # print(d1_)
 # print(d1_.shape)

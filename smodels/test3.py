@@ -12,40 +12,20 @@ from model import MixFFN
 from model import Block
 from model import DepthModel
 
-class OverlapPatchEmbed(nn.Module):
-    """ Image to Patch Embedding
-    """
 
-    def __init__(self, img_size=224, patch_size=7, stride=4, in_chans=3, embed_dim=768):
-        super().__init__()
-        img_size = [img_size, img_size]
-        patch_size = [patch_size, patch_size]
+x = torch.randn((1, 64, 32768))
 
-        self.img_size = img_size
-        self.patch_size = patch_size
-        self.H, self.W = img_size[0] // patch_size[0], img_size[1] // patch_size[1]
-        self.num_patches = self.H * self.W
-        self.proj = nn.Conv2d(in_chans, embed_dim, kernel_size=patch_size, stride=stride,
-                              padding=(patch_size[0] // 2, patch_size[1] // 2))
-        self.norm = nn.LayerNorm(embed_dim)
+c1 = nn.Conv1d(in_channels=64, out_channels=256, kernel_size=1, stride=1)
 
 
-    def forward(self, x):
-        x = self.proj(x)
-        _, _, H, W = x.shape
-        x = x.flatten(2).transpose(1, 2)
-        x = self.norm(x)
+y = c1.forward(x)
 
-        return x, H, W
+print(y.shape)
 
+y1 = y.reshape(B, C, -1)
 
+print(y1.shape)
 
-
-x = torch.randn((1, 3, 224,224))
-
-depth = DepthModel(patch_size=4)
-
-summary(depth, x.shape)
 
 #depth.forward(x)
 
