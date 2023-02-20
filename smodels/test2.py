@@ -11,12 +11,21 @@ from model import Attention
 from model import AttentionOrig
 from model import MixFFN
 from model import Block
-from model import DepthModel
+from model import DepthEncoder
+from model import DecoderBlock
 from model import SegAttention
 from model import SegOverlapPatchEmbed
+from model import Decoder
 
 
-x = torch.randn((1, 3, 512,1024))
+
+# x = torch.randn((1, 320, 16, 32))
+# attn = torch.rand((1,250,32,64))
+
+# dec = Decoder()
+# y = dec.forward(x, attn)
+
+# print(y.shape)
 
 # ope = SegOverlapPatchEmbed(img_size=[512,1024], embed_dim=64)
 # # ope = PatchEmbed(img_size=[512,1024], embed_dim=64, patch_size=7)
@@ -62,13 +71,21 @@ x = torch.randn((1, 3, 512,1024))
 # y = model.forward(x)
 
 
-dp = DepthModel(img_size=[512,1024])
+x = torch.randn((1, 3, 512,1024))
+dp = DepthEncoder(img_size=[512,1024])
+dec = DecoderBlock(img_size=[512,1024])
 y = dp.forward(x)
+
+z = dec.forward(y)
+
+print(z.shape)
 
 # blk =Block(num_embeddings=64, hidden_features=256, sr_ratio=8)
 # y = blk.forward(x, 128, 256)
 
-print(y.shape)
+for i in range(len(y)):
+    print(y[i].shape)
+# print(y.shape)
 
 #att = Attention(num_embeddings=64, sr_ratio=4, num_heads=1)
 #y = att.forward(x, 128, 256)

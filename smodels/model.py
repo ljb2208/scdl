@@ -171,7 +171,7 @@ class Attention(nn.Module):
         #if sr_ratio > 1:
         #self.sr = nn.Conv2d(num_embeddings, num_embeddings, kernel_size=sr_ratio, stride=sr_ratio)            
 
-    def forward(self, x, H, W):
+    def forward(self, x, _ , H, W):
         B, C, N = x.shape
 
         q_=self.q(x)
@@ -205,6 +205,82 @@ class Attention(nn.Module):
         print(attn.shape)
 
         v = torch.mean(x, 2).expand(B, 1, self.num_embeddings)
+
+        # v = torch.mean(x, 2).expand(B, 1, self.num_embeddings)
+        # v = torch.tile(v, (B, self.num_embeddings, 1))
+
+            
+        # v = self.v(x).transpose(2,1)
+
+        print(v.shape)
+
+        attn = attn.transpose(2, 1)
+        x = (attn @ v).transpose(2,1)
+
+        x = self.conv(x)
+
+        return x
+
+class PoseAttention(nn.Module):
+    def __init__(self, num_embeddings=64, sr_ratio=1, num_heads=1):
+        super().__init__()        
+               
+        self.num_heads = num_heads
+        self.num_embeddings = num_embeddings
+        self.sr_ratio = sr_ratio
+        self.scale = 1. / (sr_ratio*sr_ratio)
+        #k_dim = num_embeddings // sr_ratio
+
+        self.q = nn.Conv1d(num_embeddings, num_embeddings, kernel_size=1, bias=False)
+
+        self.k = nn.Conv2d(num_embeddings, num_embeddings, kernel_size=sr_ratio, stride=sr_ratio)
+        self.kbn = nn.BatchNorm1d(num_embeddings)
+        self.k2 = nn.Conv1d(num_embeddings, num_embeddings, kernel_size=1, bias=False)
+
+        # self.q2 = nn.Conv1d(num_embeddings, num_embeddings, kernel_size=1, stride=1)
+        # self.v = nn.AvgPool1d(dim)
+        #self.rwmp = nn.MaxPool1d(k_dim)        
+                
+        self.conv = nn.Conv1d(num_embeddings, num_embeddings, kernel_size=1)
+
+        
+        #if sr_ratio > 1:
+        #self.sr = nn.Conv2d(num_embeddings, num_embeddings, kernel_size=sr_ratio, stride=sr_ratio)            
+
+    def forward(self, x, x_source, H, W):
+        B, C, N = x.shape
+
+        q_=self.q(x)
+        q_ = q_.reshape(B, self.num_heads, C // self.num_heads, N)
+        # print(q_.shape)
+        # q_ = q_.permute(0,2,1,3)
+        # print(q_.shape)
+        # q_ = q_.transpose(2,1)
+
+        k_ = x.reshape(B, C, H, W)
+        k_ = self.k(k_)
+        # k_ = k_.reshape(B, C, N//C)
+        k_ = k_.reshape(B, C, -1)
+        k_ = self.kbn(k_)
+        k_ = self.k2(k_)        
+        k_ = k_.reshape(B, self.num_heads, C // self.num_heads, N // (self.sr_ratio * self.sr_ratio))
+        
+
+        q_ = q_.transpose(-2, -1)
+        print(q_.shape)
+        print(k_.shape)
+        
+        attn =(q_ @ k_)
+        attn = torch.mul(attn, self.scale)
+        attn = torch.max(attn, 3)[0]        
+
+        # attn = attn.reshape(B, C, N*self.sr_ratio)
+        # attn = self.rwmp(attn)                        
+
+
+        print(attn.shape)
+
+        v = torch.mean(x_source, 2).expand(B, 1, self.num_embeddings)
 
         # v = torch.mean(x, 2).expand(B, 1, self.num_embeddings)
         # v = torch.tile(v, (B, self.num_embeddings, 1))
@@ -297,19 +373,146 @@ class MixFFN(nn.Module):
         return x
 
 class Block(nn.Module):
-    def __init__(self, num_embeddings=64, hidden_features=256, sr_ratio=2):
-        super().__init__()        
-        self.attn = Attention(num_embeddings, sr_ratio=sr_ratio)
-        self.ffn = MixFFN(num_embeddings=num_embeddings, hidden_features=hidden_features)
+    def __init__(self, num_embeddings=64, hidden_features=256, sr_ratio=2, depth=True):
+        super().__init__()                
 
-    def forward(self, x, H, W):
-        x = x + self.attn(x, H, W)
-        x = x + self.ffn(x, H, W)
+        if depth:
+            self.attn = Attention(num_embeddings, sr_ratio=sr_ratio)
+        else:
+            self.attn = PoseAttention(num_embeddings, sr_ratio=sr_ratio)
+
+        self.ffn = MixFFN(num_embeddings=num_embeddings, hidden_features=hidden_features)
+        self.bn1 = nn.BatchNorm1d(num_embeddings)
+        self.bn2 = nn.BatchNorm1d(num_embeddings)
+
+    def forward(self, x, x_source, H, W):        
+        x = x + self.attn(self.bn1(x), x_source, H, W)
+        x = x + self.ffn(self.bn2(x), H, W)
+
+        return x
+
+class Decoder(nn.Module):
+    def __init__(self, in_channels=320, out_channels=250):
+        super().__init__()
+        self.conv = nn.Conv2d(in_channels=in_channels, out_channels=out_channels, kernel_size=1)
+        self.conv_attn = nn.Conv2d(in_channels=out_channels, out_channels=out_channels, kernel_size=1)
+
+    
+    def forward(self, x, attn):
+        new_size = attn.shape[2:]
+        x = F.interpolate(x, new_size, mode='bilinear')        
+        x = self.conv(x)
+        attn = self.conv_attn(attn)
+        x = x + attn
 
         return x
 
 
-class DepthModel(nn.Module):
+class DecoderBlock(nn.Module):
+    def __init__(self, embed_dims=[64, 128, 250, 320], img_size=[224,224]):
+        super().__init__()
+        self.img_size = img_size
+
+        self.convs = nn.Conv2d(in_channels=embed_dims[3], out_channels=embed_dims[3], kernel_size=1)
+        self.decoder1 = Decoder(in_channels=embed_dims[3], out_channels=embed_dims[2])
+        self.decoder2 = Decoder(in_channels=embed_dims[2], out_channels=embed_dims[1])
+        self.decoder3 = Decoder(in_channels=embed_dims[1], out_channels=embed_dims[0])
+        self.conve = nn.Conv2d(in_channels=embed_dims[0], out_channels=embed_dims[0], kernel_size=1)
+
+    def forward(self, outs):
+        B, _ , _ , _ = outs[0].shape
+        x = self.convs(outs[3])
+        x = self.decoder1(x, outs[2])
+        x = self.decoder2(x, outs[1])
+        x = self.decoder3(x, outs[0])
+        x = self.conve(x)
+
+        x = x.reshape(B, 4, self.img_size[0], self.img_size[1])
+
+        return x
+
+class PoseEncoder(nn.Module):
+    def __init__(self, img_size=224, patch_size=16, embed_dims=[64, 128, 250, 320],
+                 depths=[3, 8, 12, 5], sr_ratios=[8, 4, 2, 1], in_chans=3, mlp_ratio=4):
+        super().__init__()
+
+        self.depths = depths
+        self.embed_dims = embed_dims        
+
+        self.patch_embed1 = PatchEmbed(img_size=img_size, patch_size=7, stride=4, in_chans=in_chans, 
+                                embed_dim=embed_dims[0])
+        self.patch_embed2 = PatchEmbed(img_size=(img_size[0] // 4, img_size[1] //4), patch_size=3, stride=2, in_chans=embed_dims[0], 
+                                embed_dim=embed_dims[1])
+        self.patch_embed3 = PatchEmbed(img_size=(img_size[0] // 8, img_size[1] //8), patch_size=3, stride=2, in_chans=embed_dims[1], 
+                                embed_dim=embed_dims[2])
+        self.patch_embed4 = PatchEmbed(img_size=(img_size[0] // 16, img_size[1] //16), patch_size=3, stride=2, in_chans=embed_dims[2], 
+                                embed_dim=embed_dims[3])
+
+        self.block1 = nn.ModuleList([Block(
+                num_embeddings=embed_dims[0], sr_ratio=sr_ratios[0], hidden_features=embed_dims[0] * mlp_ratio, depth=False)
+                for j in range(depths[0])])                            
+
+        self.block2 = nn.ModuleList([Block(
+                num_embeddings=embed_dims[1], sr_ratio=sr_ratios[1], hidden_features=embed_dims[1] * mlp_ratio, depth=False)
+                for j in range(depths[1])])                            
+        
+        self.block3 = nn.ModuleList([Block(
+                num_embeddings=embed_dims[2], sr_ratio=sr_ratios[2], hidden_features=embed_dims[2] * mlp_ratio, depth=False)
+                for j in range(depths[2])])                          
+        
+        self.block4 = nn.ModuleList([Block(
+                num_embeddings=embed_dims[3], sr_ratio=sr_ratios[3], hidden_features=embed_dims[3] * mlp_ratio, depth=False)
+                for j in range(depths[3])])                            
+
+        
+    def forward(self, x, x_source):        
+        outs = []
+        B = x.shape[0]
+
+        #stage 1
+        x, (H, W) = self.patch_embed1(x)        
+
+        for i, blk in enumerate(self.block1):
+            x = blk(x, x_source[0], H, W)
+
+        
+        x = x.reshape(B, H, W, -1).permute(0, 3, 1, 2).contiguous()
+        outs.append(x)
+
+        #stage 2
+        x, (H, W) = self.patch_embed2(x)
+
+        for i, blk in enumerate(self.block2):
+            x = blk(x, x_source[1], H, W)
+
+        
+        x = x.reshape(B, H, W, -1).permute(0, 3, 1, 2).contiguous()
+        outs.append(x)
+
+        #stage 3
+        x, (H, W) = self.patch_embed3(x)        
+
+        for i, blk in enumerate(self.block3):
+            x = blk(x, x_source[2], H, W)
+
+        
+        x = x.reshape(B, H, W, -1).permute(0, 3, 1, 2).contiguous()
+        outs.append(x)
+
+        #stage 4
+        x, (H, W) = self.patch_embed4(x)        
+
+        for i, blk in enumerate(self.block4):
+            x = blk(x, x_source[3], H, W)
+
+        x = x.reshape(B, H, W, -1).permute(0, 3, 1, 2).contiguous()
+        outs.append(x)
+        return outs
+
+
+
+
+class DepthEncoder(nn.Module):
     def __init__(self, img_size=224, patch_size=16, embed_dims=[64, 128, 250, 320],
                  depths=[3, 4, 6, 3], sr_ratios=[8, 4, 2, 1], in_chans=3, mlp_ratio=4):
         super().__init__()
@@ -326,34 +529,34 @@ class DepthModel(nn.Module):
         self.patch_embed4 = PatchEmbed(img_size=(img_size[0] // 16, img_size[1] //16), patch_size=3, stride=2, in_chans=embed_dims[2], 
                                 embed_dim=embed_dims[3])
 
-
         self.block1 = nn.ModuleList([Block(
                 num_embeddings=embed_dims[0], sr_ratio=sr_ratios[0], hidden_features=embed_dims[0] * mlp_ratio)
-                for j in range(depths[0])])                    
+                for j in range(depths[0])])                            
 
         self.block2 = nn.ModuleList([Block(
                 num_embeddings=embed_dims[1], sr_ratio=sr_ratios[1], hidden_features=embed_dims[1] * mlp_ratio)
-                for j in range(depths[1])])                    
-
+                for j in range(depths[1])])                            
+        
         self.block3 = nn.ModuleList([Block(
                 num_embeddings=embed_dims[2], sr_ratio=sr_ratios[2], hidden_features=embed_dims[2] * mlp_ratio)
-                for j in range(depths[2])])                    
-
+                for j in range(depths[2])])                          
+        
         self.block4 = nn.ModuleList([Block(
                 num_embeddings=embed_dims[3], sr_ratio=sr_ratios[3], hidden_features=embed_dims[3] * mlp_ratio)
-                for j in range(depths[3])])                    
+                for j in range(depths[3])])                            
 
         
-    def forward(self, x):
+    def forward(self, x):        
         outs = []
         B = x.shape[0]
 
         #stage 1
-        x, (H, W) = self.patch_embed1(x)
+        x, (H, W) = self.patch_embed1(x)        
 
         for i, blk in enumerate(self.block1):
-            x = blk(x, H, W)
+            x = blk(x, None, H, W)
 
+        
         x = x.reshape(B, H, W, -1).permute(0, 3, 1, 2).contiguous()
         outs.append(x)
 
@@ -361,25 +564,27 @@ class DepthModel(nn.Module):
         x, (H, W) = self.patch_embed2(x)
 
         for i, blk in enumerate(self.block2):
-            x = blk(x, H, W)
+            x = blk(x, None, H, W)
 
+        
         x = x.reshape(B, H, W, -1).permute(0, 3, 1, 2).contiguous()
         outs.append(x)
 
         #stage 3
-        x, (H, W) = self.patch_embed3(x)
+        x, (H, W) = self.patch_embed3(x)        
 
         for i, blk in enumerate(self.block3):
-            x = blk(x, H, W)
+            x = blk(x, None, H, W)
 
+        
         x = x.reshape(B, H, W, -1).permute(0, 3, 1, 2).contiguous()
         outs.append(x)
 
         #stage 4
-        x, (H, W) = self.patch_embed4(x)
+        x, (H, W) = self.patch_embed4(x)        
 
         for i, blk in enumerate(self.block4):
-            x = blk(x, H, W)
+            x = blk(x, None, H, W)
 
         x = x.reshape(B, H, W, -1).permute(0, 3, 1, 2).contiguous()
         outs.append(x)
